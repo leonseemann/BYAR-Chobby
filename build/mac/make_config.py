@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Writes the launcher config of BAR for macOS.
 
-Defaults, links, server and spring settings come from dist_cfg/config.json.
+Defaults, links, server and spring settings come from dist_cfg/config.json,
+except the lobby server, which is localhost until macOS is cleared for online
+play.
 Its setups are replaced by macOS ones derived from the Linux setups, with the
 engine from the newest macOS engine release (tag <engine version>-mac.<n>) of
 the version that setup uses. The Engine Test setup is left out while it uses
@@ -81,6 +83,8 @@ def main():
 		else:
 			print(f"no macOS engine release for {engine_version(test_base)}, no Engine Test setup", file=sys.stderr)
 	config["setups"] = setups
+	# not cleared for online play yet; set the address in Settings to play online
+	config["json_files"]["chobby_config.json"]["server"]["address"] = "localhost"
 
 	with open(sys.argv[2], "w") as f:
 		json.dump(config, f, indent=4)

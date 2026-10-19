@@ -107,7 +107,7 @@
     "json_files": {
         "chobby_config.json": {
             "server": {
-                "address": "server4.beyondallreason.info",
+                "address": "localhost",
                 "port": 8200,
                 "protocol": "spring",
                 "serverName": "BAR"

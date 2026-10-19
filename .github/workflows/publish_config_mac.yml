@@ -1,0 +1,43 @@
+# Publishes the macOS launcher config (build/mac/make_config.py) to the
+# launcher-config branch, from which the macOS launchers read it on start.
+# Runs hourly so the macOS setups follow the engines of BAR's config and new
+# macOS engine releases; fails if BAR's main engine has no macOS release yet.
+#
+# Scheduled workflows only run from the default branch, which is mac.
+
+name: Publish macOS launcher config.json
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: publish-config-mac
+
+jobs:
+  publish_config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          ref: launcher-config
+          path: launcher-config
+
+      - name: Publish config.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/config.json" \
+            https://raw.githubusercontent.com/beyond-all-reason/BYAR-Chobby/master/dist_cfg/config.json
+          python3 build/mac/make_config.py "$RUNNER_TEMP/config.json" launcher-config/config.json
+          cd launcher-config
+          if ! git diff --quiet config.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Follow BAR's launcher config" config.json
+            git push origin HEAD:launcher-config
+          fi

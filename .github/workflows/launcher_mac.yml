@@ -1,0 +1,107 @@
+# Builds the BAR launcher for macOS (see build/mac/build.sh) on top of
+# spring-launcher's macOS support. Pushes and pull requests get an ad-hoc
+# signed app; a manual run signs and notarizes it when the Developer ID
+# secrets are set and publishes DMG, zip and latest-mac.yml as a GitHub
+# release, from which the launcher updates itself.
+#
+# Secrets (set to CHANGE_ME or missing: ad-hoc signed):
+#   MACOS_CERT_P12         base64 of the exported "Developer ID Application" .p12
+#   MACOS_CERT_PASSWORD    password of that .p12
+#   APPLE_ID               Apple ID used for notarization
+#   APPLE_TEAM_ID          team id of the Developer ID certificate
+#   APPLE_APP_PASSWORD     app-specific password of that Apple ID
+
+name: Launcher macOS
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'build/**'
+      - 'dist_cfg/**'
+      - '.github/workflows/launcher_mac.yml'
+  push:
+    branches:
+      - mac
+    paths:
+      - 'build/**'
+      - 'dist_cfg/**'
+      - '.github/workflows/launcher_mac.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    env:
+      IS_RELEASE: ${{ github.event_name == 'workflow_dispatch' }}
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' && secrets.MACOS_CERT_P12 != 'CHANGE_ME' }}
+      HAS_NOTARY: ${{ secrets.APPLE_APP_PASSWORD != '' && secrets.APPLE_APP_PASSWORD != 'CHANGE_ME' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: BYAR-Chobby
+
+      - uses: actions/checkout@v4
+        with:
+          repository: leonseemann/spring-launcher
+          ref: mac-support
+          path: launcher
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Import signing certificate
+        if: env.IS_RELEASE == 'true' && env.HAS_CERT == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -o '"Developer ID Application:[^"]*"' | head -n1 | tr -d '"')"
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          # versioned like the Linux and Windows launchers
+          export APP_VERSION="1.$(git -C BYAR-Chobby rev-list --count HEAD).0"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          if [ "$IS_RELEASE" = true ]; then
+            export UPDATE_URL="https://github.com/$GITHUB_REPOSITORY/releases/latest/download"
+            if [ "$HAS_NOTARY" = true ] && [ -n "${SIGN_IDENTITY:-}" ]; then
+              export NOTARIZE=1
+            fi
+          fi
+          BYAR-Chobby/build/mac/build.sh launcher dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BAR-macos-launcher
+          path: dist/BAR-*.dmg
+
+      - name: Publish release
+        if: env.IS_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # the zip and latest-mac.yml are what the launcher's self-update downloads
+          gh release create "v$APP_VERSION" dist/BAR-*.dmg dist/BAR-*.zip dist/latest-mac.yml \
+            -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "BAR for macOS launcher $APP_VERSION" \
+            --notes "Beyond All Reason launcher for Apple Silicon Macs (macOS 26 or later). Open the DMG, drag BAR into Applications and start it; the launcher downloads the macOS engine and the game, and updates itself from these releases."

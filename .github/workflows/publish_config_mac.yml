@@ -7,6 +7,9 @@
 
 name: Publish macOS launcher config.json
 on:
+  push:
+    branches: [mac]
+    paths: [build/mac/make_config.py, .github/workflows/publish_config_mac.yml]
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
